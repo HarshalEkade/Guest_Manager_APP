@@ -1,0 +1,43 @@
+name: flutter_application_1
+description: "A new Flutter project."
+publish_to: 'none'
+version: 0.1.0
+
+environment:
+  sdk: '>=3.4.4 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  file_picker: ^8.1.2
+  excel: ^4.0.2
+  qr_code_scanner: ^1.0.1
+  path_provider: ^2.1.4
+  permission_handler: ^11.3.1
+  spreadsheet_decoder: ^2.3.0
+  open_file: ^3.5.10
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^3.0.0
+  flutter_launcher_icons: ^0.13.1
+
+flutter:
+  uses-material-design: true
+
+flutter_launcher_icons:
+  android: true
+  ios: true
+  macos:
+    generate: true
+    image_path: "assets/Bandhan logo.png"
+  windows:
+    generate: true
+    image_path: "assets/Bandhan logo.png"
+  web:
+    generate: true
+    image_path: "assets/Bandhan logo.png"
+    background_color: "#ffffff"
+    theme_color: "#ffffff"
+  image_path: "assets/Bandhan logo.png"
