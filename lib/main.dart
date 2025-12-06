@@ -77,8 +77,10 @@ class _GuestVerificationPageState extends State<GuestVerificationPage> {
 
   List<Guest> _guests = [];
   List<Guest> _verifiedGuests = [];
+  Map<String, int> _verificationCounts = {}; // Track verification attempts by phone number
   bool _isLoading = false;
   String? _activeGuestFile;
+  String? _activeGuestFilePath;
   Guest? _lastVerified;
   String? _statusMessage;
 
@@ -107,8 +109,10 @@ class _GuestVerificationPageState extends State<GuestVerificationPage> {
       setState(() {
         _guests = guests;
         _activeGuestFile = result.files.single.name;
+        _activeGuestFilePath = path;
         _isLoading = false;
         _verifiedGuests = [];
+        _verificationCounts = {};
         _lastVerified = null;
         _statusMessage = 'Loaded ${guests.length} guest records.';
       });
@@ -161,20 +165,30 @@ class _GuestVerificationPageState extends State<GuestVerificationPage> {
       return;
     }
 
-    final alreadyVerified = _verifiedGuests.any(
+    // Update verification count for this guest
+    final count = (_verificationCounts[normalizedInput] ?? 0) + 1;
+    _verificationCounts[normalizedInput] = count;
+
+    // Check if guest is already in the verified list
+    final alreadyInVerifiedList = _verifiedGuests.any(
       (g) => _normalizePhone(g.phone) == normalizedInput,
     );
-    if (alreadyVerified) {
-      _showSnackBar('${match.name} already verified.');
-      return;
-    }
 
-    setState(() {
-      _verifiedGuests = [..._verifiedGuests, match!];
-      _lastVerified = match;
-      _statusMessage = 'Verified ${match.name}';
-    });
-    _showSnackBar('Guest verified: ${match.name}');
+    if (alreadyInVerifiedList) {
+      // Guest has been verified before, show count
+      _showSnackBar('${match.name} already registered (count: $count)');
+      setState(() {
+        _statusMessage = '${match.name} already registered (count: $count)';
+      });
+    } else {
+      // First time verification, add to verified list
+      setState(() {
+        _verifiedGuests = [..._verifiedGuests, match];
+        _lastVerified = match;
+        _statusMessage = 'Verified ${match.name}';
+      });
+      _showSnackBar('Guest verified: ${match.name}');
+    }
   }
 
   Future<void> _exportVerified() async {
@@ -183,9 +197,19 @@ class _GuestVerificationPageState extends State<GuestVerificationPage> {
       return;
     }
 
+    if (_activeGuestFilePath == null) {
+      _showSnackBar('No guest file loaded to export.');
+      return;
+    }
+
     try {
       setState(() => _isLoading = true);
-      final file = await _excelService.exportVerifiedGuests(_verifiedGuests);
+      final file = await _excelService.exportVerifiedGuests(
+        _guests,           // all guests from original file
+        _verifiedGuests,   // verified guests
+        _verificationCounts, // verification counts by phone
+        _activeGuestFilePath!, // original file path
+      );
       if (!mounted) return;
       setState(() => _isLoading = false);
       _showSnackBar('Verified list saved at ${file.path}');
