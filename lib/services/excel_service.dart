@@ -48,104 +48,6 @@ class ExcelService {
     }
   }
 
-  static Future<String> exportGuests(List<Guest> guests) async {
-    // Request storage permission
-    var status = await Permission.manageExternalStorage.request();
-    if (!status.isGranted) {
-      // If manage external storage is not granted, try with storage permission
-      status = await Permission.storage.request();
-      if (!status.isGranted) {
-        throw Exception("Storage permission denied. Please grant storage permission to save the file.");
-      }
-    }
-
-    // Create Excel file
-    final excel = excel_pkg.Excel.createExcel();
-    final sheet = excel['Verified Guests'];
-    
-    // Add header row
-    sheet.appendRow([
-      excel_pkg.TextCellValue('Name'),
-      excel_pkg.TextCellValue('Phone'),
-      excel_pkg.TextCellValue('Verification Time'),
-      excel_pkg.TextCellValue('Status')
-    ]);
-    
-    // Add data rows
-    final now = DateTime.now().toIso8601String();
-    for (var guest in guests) {
-      sheet.appendRow([
-        excel_pkg.TextCellValue(guest.name),
-        excel_pkg.TextCellValue(guest.phone),
-        excel_pkg.TextCellValue(now),
-        excel_pkg.TextCellValue('Verified')
-      ]);
-    }
-    
-    try {
-      Directory? directory;
-      
-      if (Platform.isAndroid) {
-        // For Android, try to get the public Downloads directory
-        directory = Directory('/storage/emulated/0/Download');
-        
-        // If the directory doesn't exist, try to create it
-        if (!await directory.exists()) {
-          await directory.create(recursive: true);
-        }
-        
-        // Check if we can write to the directory
-        final testFile = File('${directory.path}/.test');
-        try {
-          await testFile.writeAsString('test');
-          await testFile.delete();
-        } catch (e) {
-          // If we can't write to the directory, fall back to the app's documents directory
-          directory = await getApplicationDocumentsDirectory();
-        }
-      } else if (Platform.isIOS) {
-        // For iOS, use the documents directory
-        directory = await getApplicationDocumentsDirectory();
-      } else {
-        // For other platforms, use the documents directory
-        directory = await getApplicationDocumentsDirectory();
-      }
-      
-      // Create a unique filename with timestamp
-      final fileName = 'Bandhan_Verified_Guests_${DateTime.now().millisecondsSinceEpoch}.xlsx';
-      final file = File('${directory.path}/$fileName');
-      
-      // Save the file
-      await file.writeAsBytes(excel.encode()!);
-      
-      // If we're on Android and the file was saved to the app's directory,
-      // try to copy it to the public Downloads folder
-      if (Platform.isAndroid && !directory.path.contains('Download')) {
-        try {
-          final downloadsDir = Directory('/storage/emulated/0/Download');
-          if (!await downloadsDir.exists()) {
-            await downloadsDir.create(recursive: true);
-          }
-          
-          final publicFile = File('${downloadsDir.path}/$fileName');
-          await file.copy(publicFile.path);
-          await OpenFile.open(publicFile.path);
-          return publicFile.path;
-        } catch (e) {
-          print('Could not save to public Downloads folder: $e');
-          // Continue to return the original file path
-        }
-      }
-      
-      // Open the file
-      await OpenFile.open(file.path);
-      
-      return file.path;
-    } catch (e) {
-      throw Exception('Failed to save file: $e');
-    }
-  }
-
   List<Guest> _rowsToGuests(List<List<dynamic>> rows) {
     if (rows.isEmpty) return [];
     final dataRows = rows.skip(1);
@@ -160,24 +62,40 @@ class ExcelService {
   }
 
   Future<File> exportVerifiedGuests(
-    List<Guest> guests, {
+    List<Guest> allGuests,
+    List<Guest> verifiedGuests,
+    Map<String, int> verificationCounts,
+    String originalFilePath, {
     String? fileName,
   }) async {
-    if (guests.isEmpty) {
+    if (verifiedGuests.isEmpty) {
       throw const FormatException('No verified guests to export.');
     }
 
+    // 1. Update original Excel file with verification counts
+    await _updateOriginalExcelFile(
+      originalFilePath,
+      allGuests,
+      verificationCounts,
+    );
+
+    // 2. Create the new export file with ONLY verified guests and their counts
     final excel = excel_pkg.Excel.createExcel();
     final sheet = excel['Verified Guests'];
     sheet.appendRow([
       excel_pkg.TextCellValue('Name'),
       excel_pkg.TextCellValue('Phone'),
+      excel_pkg.TextCellValue('Count'),
     ]);
 
-    for (final guest in guests) {
+    // Add only verified guests with their verification counts to the new file
+    for (final guest in verifiedGuests) {
+      final normalizedPhone = _normalizePhone(guest.phone);
+      final count = verificationCounts[normalizedPhone] ?? 0;
       sheet.appendRow([
         excel_pkg.TextCellValue(guest.name),
         excel_pkg.TextCellValue(guest.phone),
+        excel_pkg.TextCellValue(count.toString()),
       ]);
     }
 
@@ -187,13 +105,73 @@ class ExcelService {
     }
 
     final directory = await getApplicationDocumentsDirectory();
-    final ts = DateTime.now().millisecondsSinceEpoch;
+    final timestamp = DateTime.now().millisecondsSinceEpoch;
     final safeFileName = fileName?.trim().isNotEmpty == true
         ? fileName!.trim()
-        : 'verified_guests_$ts';
+        : 'verified_guests_$timestamp';
     final file = File('${directory.path}/$safeFileName.xlsx');
     await file.writeAsBytes(bytes, flush: true);
     return file;
   }
+
+  Future<void> _updateOriginalExcelFile(
+    String originalFilePath,
+    List<Guest> allGuests,
+    Map<String, int> verificationCounts,
+  ) async {
+    final originalFile = File(originalFilePath);
+    if (!await originalFile.exists()) return;
+
+    // Load the original Excel file
+    final bytes = await originalFile.readAsBytes();
+    final originalExcel = excel_pkg.Excel.decodeBytes(bytes);
+
+    if (originalExcel.tables.isEmpty) return;
+
+    final sheet = originalExcel.tables.values.first;
+
+    // Check if Count column already exists (column D)
+    bool countColumnExists = false;
+    if (sheet.maxCols >= 4) {
+      // Check if column D header is 'Count'
+      final headerCell = sheet.rows.isEmpty ? null : sheet.rows.first.length > 3 ? sheet.rows.first[3] : null;
+      if (headerCell != null && headerCell.toString().trim() == 'Count') {
+        countColumnExists = true;
+      }
+    }
+
+    if (!countColumnExists) {
+      // Add Count column header to column D
+      if (sheet.rows.isNotEmpty) {
+        sheet.rows[0].add(excel_pkg.TextCellValue('Count'));
+      }
+    }
+
+    // Update the rows with verification counts
+    for (int i = 1; i < sheet.rows.length && i <= allGuests.length; i++) {
+      final row = sheet.rows[i];
+      final guest = allGuests[i - 1]; // Match by position
+
+      final normalizedPhone = _normalizePhone(guest.phone);
+      final count = verificationCounts[normalizedPhone] ?? 0;
+
+      if (row.length > 3) {
+        // Update existing count column
+        row[3] = excel_pkg.TextCellValue(count.toString());
+      } else {
+        // Add new count column
+        row.add(excel_pkg.TextCellValue(count.toString()));
+      }
+    }
+
+    // Save the updated Excel file
+    final updatedBytes = originalExcel.encode();
+    if (updatedBytes != null) {
+      await originalFile.writeAsBytes(updatedBytes);
+    }
+  }
+
+  String _normalizePhone(String value) =>
+      value.replaceAll(RegExp(r'[^0-9+]'), '').replaceFirst(RegExp(r'^\+'), '');
 }
 
